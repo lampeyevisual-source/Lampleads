@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plataforma de Inteligência B2B - Leads Ativos</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f4f7f9;
+        }
+        .score-low { background-color: #fca5a5; } /* Red-400 */
+        .score-medium { background-color: #fcd34d; } /* Yellow-400 */
+        .score-high { background-color: #6ee7b7; } /* Emerald-300 */
+        /* Estilo para a tabela */
+        .table-row-clickable:hover {
+            background-color: #e0f2f1; /* Cor mais clara ao passar o mouse */
+            cursor: pointer;
+        }
+        .modal {
+            transition: opacity 0.3s ease-in-out;
+        }
+        .modal-content {
+            animation: slide-down 0.3s ease-out;
+        }
+        @keyframes slide-down {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="p-4 sm:p-8">
+
+    <!-- Firebase Imports -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, query, onSnapshot, doc, getDoc, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Variáveis globais (devem ser acessadas pelo JS do script principal)
+        window.firebase = { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, getFirestore, collection, query, onSnapshot, doc, getDoc, setLogLevel };
+    </script>
+
+    <!-- Cabeçalho -->
+    <header class="mb-8 p-4 bg-white rounded-xl shadow-lg border-t-4 border-indigo-600">
+        <h1 class="text-3xl font-extrabold text-gray-900 mb-1">Plataforma de Inteligência B2B</h1>
+        <p class="text-gray-500">Gestão e Qualificação de Leads da Receita Federal em Tempo Real</p>
+        <div id="auth-status" class="mt-2 text-sm text-gray-600">
+            <!-- Status de autenticação será inserido aqui -->
+        </div>
+    </header>
+
+    <!-- Dashboard de Métricas (Mock) -->
+    <section id="metrics" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div class="bg-white p-5 rounded-xl shadow-md border-l-4 border-green-500">
+            <p class="text-sm text-gray-500">Total de Leads</p>
+            <p class="text-2xl font-bold text-gray-800" id="total-leads">0</p>
+        </div>
+        <div class="bg-white p-5 rounded-xl shadow-md border-l-4 border-indigo-500">
+            <p class="text-sm text-gray-500">Score Alto (A)</p>
+            <p class="text-2xl font-bold text-gray-800" id="score-a-count">0</p>
+        </div>
+        <div class="bg-white p-5 rounded-xl shadow-md border-l-4 border-yellow-500">
+            <p class="text-sm text-gray-500">Score Médio (B)</p>
+            <p class="text-2xl font-bold text-gray-800" id="score-b-count">0</p>
+        </div>
+        <div class="bg-white p-5 rounded-xl shadow-md border-l-4 border-red-500">
+            <p class="text-sm text-gray-500">Leads Filtrados</p>
+            <p class="text-2xl font-bold text-gray-800" id="filtered-leads-count">0</p>
+        </div>
+    </section>
+
+    <!-- Filtros e Tabela -->
+    <section class="bg-white p-6 rounded-xl shadow-lg">
+        <h2 class="text-xl font-semibold mb-4 text-gray-700">Filtros de Qualificação</h2>
+        
+        <!-- Controles de Filtro -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <div>
+                <label for="filter-score" class="block text-sm font-medium text-gray-700">Score Mínimo</label>
+                <select id="filter-score" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:ring-indigo-500 focus:border-indigo-500">
+                    <option value="">Todos</option>
+                    <option value="A">Score A (Alto)</option>
+                    <option value="B">Score B (Médio)</option>
+                    <option>Score C (Baixo)</option>
+                </select>
+            </div>
+            <div>
+                <label for="filter-segment" class="block text-sm font-medium text-gray-700">Segmento</label>
+                <select id="filter-segment" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:ring-indigo-500 focus:border-indigo-500">
+                    <option value="">Todos</option>
+                    <option>Indústria</option>
+                    <option>Serviços</option>
+                    <option>Comércio</option>
+                </select>
+            </div>
+            <div>
+                <label for="filter-revenue" class="block text-sm font-medium text-gray-700">Faturamento Mín.</label>
+                <select id="filter-revenue" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:ring-indigo-500 focus:border-indigo-500">
+                    <option value="0">Todos</option>
+                    <option value="1000000">Acima de R$ 1 Milhão</option>
+                    <option value="5000000">Acima de R$ 5 Milhões</option>
+                </select>
+            </div>
+            <div>
+                <label for="filter-status" class="block text-sm font-medium text-gray-700">Situação</label>
+                <select id="filter-status" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-2 border focus:ring-indigo-500 focus:border-indigo-500">
+                    <option value="">Todas</option>
+                    <option>Ativa</option>
+                    <option>Suspensa</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Tabela de Leads -->
+        <div class="overflow-x-auto rounded-lg shadow-inner border border-gray-200">
+            <table class="min-w-full divide-y divide-gray-200">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Score</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Razão Social</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">CNPJ</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Faturamento (Estimado)</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Segmento Principal</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Situação</th>
+                        <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ações</th>
+                    </tr>
+                </thead>
+                <tbody id="leads-table-body" class="bg-white divide-y divide-gray-200">
+                    <!-- Linhas de leads serão inseridas aqui pelo JavaScript -->
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Mensagem de carregamento/vazio -->
+        <div id="loading-message" class="text-center py-6 text-indigo-600 font-medium hidden">
+            Carregando leads em tempo real...
+        </div>
+        <div id="empty-message" class="text-center py-6 text-gray-500 font-medium hidden">
+            Nenhum lead encontrado com os filtros aplicados.
+        </div>
+    </section>
+
+    <!-- Modal de Detalhes do Lead -->
+    <div id="lead-details-modal" class="modal fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50 opacity-0 pointer-events-none">
+        <div class="modal-content bg-white w-full max-w-4xl p-6 rounded-xl shadow-2xl relative">
+            <button onclick="window.hideLeadDetailsModal()" class="absolute top-3 right-3 text-gray-400 hover:text-gray-600 transition-colors">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+            </button>
+
+            <h3 class="text-2xl font-bold text-indigo-600 mb-4" id="modal-razao-social"></h3>
+            <p class="text-sm text-gray-500 mb-6">Detalhes completos do lead para qualificação e contato.</p>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Coluna 1: Informações Básicas (Receita) -->
+                <div class="lg:col-span-2 space-y-4">
+                    <h4 class="text-lg font-semibold border-b pb-1 mb-2 text-gray-700">Dados Cadastrais (Receita)</h4>
+                    <div class="grid grid-cols-2 gap-4 text-sm">
+                        <p><strong>CNPJ:</strong> <span id="modal-cnpj" class="text-gray-600"></span></p>
+                        <p><strong>Situação:</strong> <span id="modal-situacao" class="text-gray-600"></span></p>
+                        <p><strong>Data Abertura:</strong> <span id="modal-data-abertura" class="text-gray-600"></span></p>
+                        <p><strong>CNAE Principal:</strong> <span id="modal-cnae" class="text-gray-600"></span></p>
+                        <p><strong>Segmento:</strong> <span id="modal-segmento" class="text-gray-600"></span></p>
+                        <p><strong>Natureza Jurídica:</strong> <span id="modal-natureza" class="text-gray-600"></span></p>
+                    </div>
+
+                    <h4 class="text-lg font-semibold border-b pb-1 mb-2 text-gray-700 pt-4">Endereço</h4>
+                    <p class="text-sm text-gray-600" id="modal-endereco"></p>
+                </div>
+
+                <!-- Coluna 2: Inteligência (Scoring e Contatos) -->
+                <div>
+                    <h4 class="text-lg font-semibold border-b pb-1 mb-2 text-gray-700">Qualificação (Scoring)</h4>
+                    <div class="flex items-center space-x-3 mb-4">
+                        <div id="modal-score-badge" class="px-3 py-1 rounded-full text-xs font-bold text-gray-800"></div>
+                        <p><strong>Faturamento Estimado:</strong> <span id="modal-faturamento" class="text-gray-600 font-semibold"></span></p>
+                    </div>
+                    
+                    <h4 class="text-lg font-semibold border-b pb-1 mb-2 text-gray-700 pt-4">Contatos Digitais</h4>
+                    <ul class="space-y-2 text-sm text-gray-600" id="modal-contatos">
+                        <!-- Contatos serão inseridos aqui -->
+                    </ul>
+                    <button class="mt-4 w-full bg-indigo-600 text-white py-2 rounded-lg hover:bg-indigo-700 transition-colors font-medium shadow-md">
+                        Ação de Venda (Ex: CRM)
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JavaScript Principal -->
+    <script>
+        // Log de depuração do Firebase
+        window.firebase.setLogLevel('debug');
+
+        const LEADS_COLLECTION = 'leads_b2b'; // Nome da coleção no Firestore
+        
+        let app, db, auth;
+        let userId = null;
+        let allLeads = []; // Armazena todos os leads brutos do Firestore
+        
+        // --- FUNÇÕES DE LÓGICA (MOCK) ---
+        
+        // Simulação do resultado do seu motor Python de enriquecimento
+        function simularEnriquecimento(cnpj) {
+            // Este é o passo que seu script Python faz: enriquecer com dados externos/estimados
+            const random = (s) => (s.split('').reduce((a, b) => a + b.charCodeAt(0), 0) % 1000) / 1000;
+            const r = random(cnpj);
+
+            const faturamento = (r * 10000000 + 500000).toFixed(0);
+            const segmento = ['Indústria', 'Serviços', 'Comércio'][Math.floor(r * 3)];
+            const status = ['Ativa', 'Suspensa'][r > 0.95 ? 1 : 0];
+            const dataAbertura = new Date(Date.now() - Math.floor(r * 5 * 365 * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
+            const cnae = `4712-1/${Math.floor(r * 99)}`;
+            const naturezaJuridica = ['Sociedade Empresária Limitada', 'Empresário Individual', 'Associação Privada'][Math.floor(r * 3)];
+            
+            // Contatos digitais (simulação de enriquecimento extra)
+            const contatos = {
+                site: r > 0.3 ? `https://www.${cnpj.slice(0, 8)}empresa.com.br` : null,
+                linkedin: r > 0.5 ? `@${cnpj.slice(0, 8)}_b2b` : null,
+                email: r > 0.7 ? `contato@${cnpj.slice(0, 8)}.com.br` : null,
+            };
+
+            return { faturamento, segmento, status, dataAbertura, cnae, naturezaJuridica, contatos };
+        }
+
+        // Simulação do score de qualificação
+        function calcularScore(lead) {
+            let score = 0;
+            const faturamento = parseInt(lead.faturamento);
+            
+            if (faturamento > 5000000) score += 3; // Faturamento alto
+            else if (faturamento > 1000000) score += 2; // Faturamento médio
+            
+            if (lead.status === 'Ativa') score += 1; // Situação ativa
+            if (lead.segmento === 'Indústria' || lead.segmento === 'Serviços') score += 1; // Segmentos preferenciais
+
+            if (score >= 4) return { label: 'A', class: 'score-high' };
+            if (score >= 2) return { label: 'B', class: 'score-medium' };
+            return { label: 'C', class: 'score-low' };
+        }
+        
+        // Formata o valor do faturamento
+        function formatCurrency(value) {
+            return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 0 }).format(value);
+        }
+
+        // --- FUNÇÕES DE FIREBASE E AUTENTICAÇÃO ---
+
+        async function initFirebase() {
+            try {
+                // Acessa as variáveis globais injetadas pelo ambiente (Canvas)
+                const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+                const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+                if (Object.keys(firebaseConfig).length === 0) {
+                    throw new Error("Configuração do Firebase não encontrada.");
+                }
+
+                app = window.firebase.initializeApp(firebaseConfig);
+                db = window.firebase.getFirestore(app);
+                auth = window.firebase.getAuth(app);
+
+                // Tenta fazer login com o token ou anonimamente
+                if (initialAuthToken) {
+                    await window.firebase.signInWithCustomToken(auth, initialAuthToken);
+                } else {
+                    await window.firebase.signInAnonymously(auth);
+                }
+
+                // Configura o listener de autenticação
+                window.firebase.onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        document.getElementById('auth-status').textContent = `Usuário autenticado: ${userId}`;
+                        // Inicia o listener do Firestore apenas após a autenticação
+                        startLeadsListener(appId, userId); 
+                    } else {
+                        userId = null;
+                        document.getElementById('auth-status').textContent = 'Usuário Anônimo (offline)';
+                    }
+                });
+            } catch (error) {
+                console.error("Erro na inicialização do Firebase ou autenticação:", error);
+                document.getElementById('auth-status').textContent = 'Erro de inicialização. Verifique o console.';
+            }
+        }
+
+        function getCollectionPath(appId, userId) {
+            // Usamos a coleção pública para simular dados que seriam compartilhados ou acessados
+            // por toda a equipe (como leads que o script Python alimenta).
+            return `artifacts/${appId}/public/data/${LEADS_COLLECTION}`;
+        }
+
+        function startLeadsListener(appId, userId) {
+            if (!db || !userId) return; // Garante que o DB e o userId estão prontos
+
+            const leadsRef = window.firebase.collection(db, getCollectionPath(appId, userId));
+            const q = window.firebase.query(leadsRef);
+            
+            const tableBody = document.getElementById('leads-table-body');
+            const loadingMessage = document.getElementById('loading-message');
+            
+            loadingMessage.classList.remove('hidden');
+
+            // Listener em tempo real (onSnapshot)
+            window.firebase.onSnapshot(q, (snapshot) => {
+                const fetchedLeads = [];
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    const enrichedData = simularEnriquecimento(data.cnpj);
+                    
+                    // Combina dados da Receita (Firestore) e dados enriquecidos (Simulação)
+                    const lead = {
+                        id: doc.id,
+                        razao_social: data.razao_social,
+                        cnpj: data.cnpj,
+                        endereco: data.endereco || 'Não informado', // Adiciona endereço básico
+                        ...enrichedData,
+                    };
+                    lead.score = calcularScore(lead);
+                    fetchedLeads.push(lead);
+                });
+
+                allLeads = fetchedLeads; // Atualiza o array global
+                loadingMessage.classList.add('hidden');
+                
+                // Redesenha a tabela com os leads atualizados
+                applyFiltersAndRenderTable();
+                updateMetrics();
+
+            }, (error) => {
+                console.error("Erro ao obter dados do Firestore:", error);
+                loadingMessage.textContent = 'Erro ao carregar dados.';
+            });
+        }
+
+        // --- FUNÇÕES DE FILTRAGEM E RENDERIZAÇÃO ---
+
+        function applyFiltersAndRenderTable() {
+            const scoreFilter = document.getElementById('filter-score').value;
+            const segmentFilter = document.getElementById('filter-segment').value;
+            const revenueFilter = parseInt(document.getElementById('filter-revenue').value);
+            const statusFilter = document.getElementById('filter-status').value;
+
+            const filteredLeads = allLeads.filter(lead => {
+                const matchesScore = !scoreFilter || lead.score.label === scoreFilter;
+                const matchesSegment = !segmentFilter || lead.segmento === segmentFilter;
+                const matchesRevenue = lead.faturamento >= revenueFilter;
+                const matchesStatus = !statusFilter || lead.status === statusFilter;
+                
+                return matchesScore && matchesSegment && matchesRevenue && matchesStatus;
+            });
+
+            renderTable(filteredLeads);
+            document.getElementById('filtered-leads-count').textContent = filteredLeads.length;
+        }
+
+        function renderTable(leads) {
+            const tableBody = document.getElementById('leads-table-body');
+            tableBody.innerHTML = '';
+            
+            if (leads.length === 0) {
+                document.getElementById('empty-message').classList.remove('hidden');
+                return;
+            }
+            document.getElementById('empty-message').classList.add('hidden');
+
+
+            leads.forEach(lead => {
+                const row = document.createElement('tr');
+                row.className = 'table-row-clickable transition-colors';
+                row.setAttribute('data-lead-id', lead.id);
+                row.onclick = () => showLeadDetailsModal(lead.id); // Adiciona evento de clique para o modal
+                
+                // Célula do Score
+                const scoreCell = document.createElement('td');
+                scoreCell.className = 'px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-900';
+                scoreCell.innerHTML = `<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full text-gray-800 ${lead.score.class}">${lead.score.label}</span>`;
+                row.appendChild(scoreCell);
+                
+                // Células de dados
+                const fields = [
+                    'razao_social', 
+                    'cnpj', 
+                    { key: 'faturamento', formatter: formatCurrency },
+                    'segmento', 
+                    'status'
+                ];
+
+                fields.forEach(field => {
+                    const cell = document.createElement('td');
+                    cell.className = 'px-6 py-4 whitespace-nowrap text-sm text-gray-700';
+                    
+                    if (typeof field === 'string') {
+                        cell.textContent = lead[field];
+                    } else {
+                        cell.textContent = field.formatter(lead[field]);
+                    }
+                    row.appendChild(cell);
+                });
+
+                // Célula de Ações
+                const actionCell = document.createElement('td');
+                actionCell.className = 'px-6 py-4 whitespace-nowrap text-right text-sm font-medium';
+                actionCell.innerHTML = `<button class="text-indigo-600 hover:text-indigo-900">Detalhes</button>`;
+                actionCell.onclick = (e) => {
+                    e.stopPropagation(); // Previne que o clique na célula acione o clique da linha
+                    showLeadDetailsModal(lead.id);
+                };
+
+                row.appendChild(actionCell);
+                
+                tableBody.appendChild(row);
+            });
+        }
+
+        function updateMetrics() {
+            document.getElementById('total-leads').textContent = allLeads.length;
+            
+            const scoreA = allLeads.filter(l => l.score.label === 'A').length;
+            const scoreB = allLeads.filter(l => l.score.label === 'B').length;
+            
+            document.getElementById('score-a-count').textContent = scoreA;
+            document.getElementById('score-b-count').textContent = scoreB;
+        }
+
+        // --- FUNÇÕES DO MODAL ---
+        
+        // Função para mostrar o modal de detalhes
+        window.showLeadDetailsModal = (leadId) => {
+            const lead = allLeads.find(l => l.id === leadId);
+            if (!lead) return console.error("Lead não encontrado:", leadId);
+
+            const modal = document.getElementById('lead-details-modal');
+            
+            // Preenche os dados básicos e de scoring
+            document.getElementById('modal-razao-social').textContent = lead.razao_social;
+            document.getElementById('modal-cnpj').textContent = lead.cnpj;
+            document.getElementById('modal-situacao').textContent = lead.status;
+            document.getElementById('modal-data-abertura').textContent = lead.dataAbertura;
+            document.getElementById('modal-cnae').textContent = lead.cnae;
+            document.getElementById('modal-segmento').textContent = lead.segmento;
+            document.getElementById('modal-natureza').textContent = lead.naturezaJuridica;
+            document.getElementById('modal-faturamento').textContent = formatCurrency(lead.faturamento);
+            document.getElementById('modal-endereco').textContent = lead.endereco;
+
+            // Badge de Score
+            const scoreBadge = document.getElementById('modal-score-badge');
+            scoreBadge.textContent = `Score ${lead.score.label}`;
+            scoreBadge.className = `px-3 py-1 rounded-full text-xs font-bold text-gray-800 ${lead.score.class}`;
+            
+            // Preenche os Contatos Digitais
+            const contatosList = document.getElementById('modal-contatos');
+            contatosList.innerHTML = '';
+
+            const contatosData = [
+                { key: 'site', label: 'Website', icon: '🌐' },
+                { key: 'linkedin', label: 'LinkedIn', icon: '🔗' },
+                { key: 'email', label: 'E-mail', icon: '📧' },
+            ];
+
+            let hasContact = false;
+            contatosData.forEach(item => {
+                if (lead.contatos[item.key]) {
+                    hasContact = true;
+                    const li = document.createElement('li');
+                    li.innerHTML = `<span>${item.icon} ${item.label}:</span> <a href="${item.key === 'email' ? 'mailto:' : ''}${lead.contatos[item.key]}" target="_blank" class="text-indigo-600 hover:text-indigo-800 underline">${lead.contatos[item.key]}</a>`;
+                    contatosList.appendChild(li);
+                }
+            });
+
+            if (!hasContact) {
+                contatosList.innerHTML = '<li>Nenhum contato digital encontrado.</li>';
+            }
+
+            // Exibe o modal
+            modal.classList.remove('pointer-events-none', 'opacity-0');
+            modal.classList.add('opacity-100');
+        };
+
+        // Função para esconder o modal de detalhes
+        window.hideLeadDetailsModal = () => {
+            const modal = document.getElementById('lead-details-modal');
+            modal.classList.remove('opacity-100');
+            modal.classList.add('opacity-0', 'pointer-events-none');
+        };
+
+        // Escuta por cliques fora do modal para fechar
+        document.getElementById('lead-details-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'lead-details-modal') {
+                window.hideLeadDetailsModal();
+            }
+        });
+
+        // --- INICIALIZAÇÃO ---
+
+        window.onload = function() {
+            // Adiciona listeners para os filtros
+            const filterElements = document.querySelectorAll('#filter-score, #filter-segment, #filter-revenue, #filter-status');
+            filterElements.forEach(el => {
+                el.addEventListener('change', applyFiltersAndRenderTable);
+            });
+
+            // Cria 10 leads iniciais de mock para o Firestore, se a coleção não existir
+            async function createInitialMockData(appId, userId) {
+                if (!db || !userId) return;
+
+                const leadsRef = window.firebase.collection(db, getCollectionPath(appId, userId));
+                
+                // Tenta buscar se já existe algum documento para evitar duplicidade
+                const snapshot = await window.firebase.getDocs(leadsRef);
+                if (!snapshot.empty) {
+                    // Dados já existem, não crie novamente
+                    return;
+                }
+                
+                const mockLeads = [
+                    { razao_social: "INOVADORA SOLUÇÕES LTDA", cnpj: "45.123.000/0001-99", endereco: "Rua das Flores, 100, São Paulo/SP" },
+                    { razao_social: "COMÉRCIO IDEAL SA", cnpj: "12.345.000/0001-01", endereco: "Av. Principal, 50, Rio de Janeiro/RJ" },
+                    { razao_social: "SERVIÇOS DE TI PREMIUM EIRELI", cnpj: "99.887.000/0001-50", endereco: "Praça Central, 200, Belo Horizonte/MG" },
+                    { razao_social: "METALÚRGICA FORTE LTDA", cnpj: "33.555.000/0001-77", endereco: "Estrada Industrial, 1, Curitiba/PR" },
+                    { razao_social: "CONSULTORIA ALPHA ME", cnpj: "66.777.000/0001-11", endereco: "Rua do Porto, 30, Salvador/BA" },
+                ];
+                
+                console.log("Criando dados iniciais de mock no Firestore...");
+                for (const lead of mockLeads) {
+                    // Aqui, o seu script Python faria o `addDoc` ou `setDoc` para alimentar a coleção.
+                    await window.firebase.addDoc(leadsRef, lead);
+                }
+            }
+
+            // Garante que a criação de mock só ocorre após a autenticação
+            window.firebase.onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    createInitialMockData(
+                        typeof __app_id !== 'undefined' ? __app_id : 'default-app-id',
+                        user.uid
+                    );
+                }
+            });
+
+            initFirebase();
+        };
+
+    </script>
+</body>
+</html>
