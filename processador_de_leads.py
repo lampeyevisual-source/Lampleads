@@ -1,299 +1,290 @@
-# Este é o Módulo Core (Motor de Filtragem e Enriquecimento) da sua Plataforma de Leads.
-# Ele usa a biblioteca Pandas (a Betoneira) para processar os dados.
+# processador_de_leads.py - Módulo de Filtro, Agregação Total e Geração de HTML (Versão Otimizada)
 
-# 1. Puxando a Betoneira (Pandas)
 import pandas as pd
-import random 
-import time
+import numpy as np
+import os
+import re
+from tqdm import tqdm
+from typing import List, Optional
 
-# =========================================================================
-# CONFIGURAÇÃO DE EXIBIÇÃO DO PANDAS (FORÇAR TODAS AS COLUNAS NO TERMINAL)
-# =========================================================================
-pd.set_option('display.max_columns', None)
-pd.set_option('display.width', 1000)
-pd.set_option('display.max_rows', None) 
+# --- Configurações de Caminho e Agregação ---
+DIRETORIO_BASE = 'Dados_CNPJ'
+NOME_ARQUIVO_MESTRE = 'CSV_Mestre_Final.csv'
+SEPARADOR_AGREGACAO = ' | ' # Separador para juntar múltiplos valores (ex: Sócios, CNAEs)
 
+# ==============================================================================
+# FUNÇÕES DE UTILIDADE (Com correção para encontrar o caminho)
+# ==============================================================================
 
-# -------------------------------------------------------------------------
-# FUNÇÕES DE SIMULAÇÃO DE CHAMADA DE API (MÓDULO III - Enriquecimento Completo)
-# -------------------------------------------------------------------------
-def simular_busca_google(razao_social, cidade):
-    """
-    Simula a chamada a uma API do Google Search para encontrar o SITE.
-    """
-    time.sleep(0.01) # Simula latência
-    
-    if ('Soft' in razao_social or 'Mark' in razao_social) and 'São Paulo' in cidade:
-        if 'Software Solutions' in razao_social:
-             return "https://www.softwaresolutions.com.br"
-        elif 'Marketing Digital' in razao_social:
-             return "https://www.marketingdigitalpro.com"
-        return f"https://www.{razao_social.lower().replace(' ', '').replace('ltda', '').replace('pro', '')}.com.br"
+def _encontrar_caminho_mestre() -> Optional[str]:
+    """Localiza o caminho completo para o CSV Mestre mais recente (Versão Corrigida)."""
+    try:
+        # 1. Encontra a subpasta de período (AAAA-MM) mais recente
+        itens = os.listdir(DIRETORIO_BASE)
+        padrao_data = re.compile(r'^\d{4}-\d{2}$')
+        diretorios_de_periodo = [
+            item for item in itens 
+            if os.path.isdir(os.path.join(DIRETORIO_BASE, item)) and padrao_data.match(item)
+        ]
         
-    return "N/A"
+        if not diretorios_de_periodo:
+            print("AVISO: Nenhuma pasta AAAA-MM encontrada dentro de Dados_CNPJ.") 
+            return None
 
-def simular_busca_email(site):
-    """
-    Simula a busca do e-mail de contato no site enriquecido.
-    """
-    time.sleep(0.01) # Simula latência
-    if site != "N/A" and "softwaresolutions" in site:
-        return "contato@softwaresolutions.com.br"
-    elif site != "N/A" and "marketingdigitalpro" in site:
-        return "vendas@marketingdigitalpro.com"
-    return "N/A"
+        # Pega a pasta mais recente (Ex: 2025-11)
+        diretorio_recente_nome = sorted(diretorios_de_periodo, reverse=True)[0]
+        diretorio_periodo = os.path.join(DIRETORIO_BASE, diretorio_recente_nome)
+        
+        caminho_mestre = os.path.join(diretorio_periodo, NOME_ARQUIVO_MESTRE)
+        
+        if not os.path.exists(caminho_mestre):
+            print(f"AVISO: Arquivo CSV Mestre não encontrado em: {caminho_mestre}.")
+            return None
+        
+        return caminho_mestre
 
-def simular_busca_linkedin(razao_social):
-    """
-    Simula a busca pelo perfil da empresa no LinkedIn.
-    """
-    time.sleep(0.01) # Simula latência
-    if 'Software Solutions' in razao_social:
-        return "https://linkedin.com/company/softwares-solutions"
-    elif 'Serviços AWS Brasil' in razao_social:
-        return "https://linkedin.com/company/aws-br-oficial"
-    return "N/A"
+    except FileNotFoundError:
+        print(f"ERRO CRÍTICO: O diretório base '{DIRETORIO_BASE}' não foi encontrado. Crie a pasta e execute o pipeline de ETL.")
+        return None
+    except Exception as e:
+        print(f"ERRO inesperado ao buscar caminho mestre: {e}")
+        return None
 
-def simular_busca_contato_digital(razao_social):
+# ==============================================================================
+# 1. FUNÇÃO PRINCIPAL: FILTRAGEM E PRÉ-PROCESSAMENTO
+# ==============================================================================
+
+def aplicar_inteligencia_e_filtrar_leads(caminho_mestre: str, arquivo_html: str) -> bool:
     """
-    Simula a busca por Celular, WhatsApp, Instagram e Facebook.
-    Retorna um dicionário com os resultados.
+    Lê o CSV Mestre (com otimização de memória), aplica agregação total, filtra e gera o HTML.
     """
-    time.sleep(0.01)
-    if 'Software Solutions' in razao_social:
-        return {
-            'WHATSAPP': '(11) 98765-4321', 
-            'INSTAGRAM': '@softwaresolutionsbr', 
-            'FACEBOOK': 'facebook.com/softwaresolutions',
-            'CELULAR_DONO': '(11) 99999-0000'
+    print("=" * 80)
+    print("FASE 7: INICIANDO PROCESSAMENTO DE LEADS (AGREGAÇÃO DE DADOS COMPLETOS)")
+    print(f"Lendo dados de: {caminho_mestre}")
+    print("=" * 80)
+
+    # 1. LEITURA DOS DADOS (COM OTIMIZAÇÃO DE MEMÓRIA CRÍTICA)
+    try:
+        # Mapeamento de tipos para economizar memória (Reduz o uso de RAM de 11GB para 3-5GB)
+        dtype_spec = {
+            # Tipos Categóricos/Códigos (Repetição de valores)
+            'situacao_cadastral': 'category',
+            'porte_empresa': 'category',
+            'codigo_municipio': 'category',
+            'uf': 'category',
+            'matriz_filial': 'category',
+            'TABELA_ORIGEM': 'category',
+            'cnae_fiscal_principal': 'category',
+            
+            # Manter como 'object' para strings longas ou variáveis
+            'cnae_fiscal_secundario': 'object',
+            'nome_socio': 'object', 
+            
+            # Tipos Numéricos (CNPJs e Datas, tratados como strings para manter zeros à esquerda)
+            'cnpj_basico': 'string',
+            'cnpj_ordem': 'string',
+            'cnpj_dv': 'string',
+            'data_inicio_atividade': 'string',
+            'data_situacao_cadastral': 'string',
+            
+            # Capital Social e strings longas (Nomes e Endereços)
+            'capital_social': np.float64, # Usar float para o capital
+            'razao_social': 'string',
+            'nome_fantasia': 'string',
+            'correio_eletronico': 'string',
         }
-    elif 'Marketing Digital' in razao_social:
-        return {
-            'WHATSAPP': '(11) 91234-5678', 
-            'INSTAGRAM': '@marketingpro', 
-            'FACEBOOK': 'N/A',
-            'CELULAR_DONO': 'N/A'
-        }
-    return {'WHATSAPP': 'N/A', 'INSTAGRAM': 'N/A', 'FACEBOOK': 'N/A', 'CELULAR_DONO': 'N/A'}
-
-def simular_busca_google_maps(razao_social):
-    """
-    Simula a busca por perfil ativo no Google Maps.
-    """
-    time.sleep(0.01)
-    if 'Software Solutions' in razao_social or 'Marketing Digital' in razao_social:
-        return "Sim (Otimizado)"
-    return "Não"
-
-
-# -------------------------------------------------------------------------
-# 2. Criando a Tabela de CNPJs (Simulação COMPLETA)
-# -------------------------------------------------------------------------
-dados_simulados = {
-    'CNPJ': [f'123456780001{i:02d}' for i in range(1, 15)],
-    'RAZAO_SOCIAL': ['Software Solutions Ltda', 'Consultoria XP', 'Imobiliária Central', 'Clínica Sorriso', 'Marketing Digital Pro', 
-                    'Academia Corpo Livre', 'Tech Startup 10', 'Restaurante Sabor', 'Serviços AWS Brasil', 'Desenvolvimento Ágil',
-                    'Serviços Contábeis SP', 'E-commerce Moda', 'Startup de Pagamentos', 'Agência de Viagens'],
-    'CNAE': ['6201600', '7020400', '6810200', '8630500', '7319000', 
-            '9313100', '6201600', '5611201', '6201600', '6201600',
-            '6920601', '4781400', '6201600', '7911200'],
-    'CIDADE': ['São Paulo', 'Rio de Janeiro', 'São Paulo', 'Belo Horizonte', 'São Paulo', 
-                'Curitiba', 'Rio de Janeiro', 'Belo Horizonte', 'São Paulo', 'Curitiba', 
-                'São Paulo', 'Rio de Janeiro', 'São Paulo', 'Belo Horizonte'],
-    'UF': ['SP', 'RJ', 'SP', 'MG', 'SP', 'PR', 'RJ', 'MG', 'SP', 'PR', 'SP', 'RJ', 'SP', 'MG'],
-    
-    # NOVOS CAMPOS DE ENDEREÇO DETALHADO
-    'RUA': [
-        'Av. Paulista', 'R. Sete de Setembro', 'Av. Faria Lima', 'R. da Bahia',
-        'R. Augusta', 'R. XV de Novembro', 'Praia de Botafogo', 'Av. Afonso Pena',
-        'Av. Eng. Luis Carlos Berrini', 'R. Ébano Pereira', 'R. Consolação',
-        'Av. Atlântica', 'Av. Brigadeiro Faria Lima', 'R. Rio de Janeiro'
-    ],
-    'BAIRRO': [
-        'Bela Vista', 'Centro', 'Itaim Bibi', 'Lourdes', 'Consolação',
-        'Centro', 'Botafogo', 'Centro', 'Brooklin', 'Centro',
-        'Consolação', 'Copacabana', 'Itaim Bibi', 'Lourdes'
-    ],
-    'NUMERO_ESPECIFICACAO': [
-        '1000, 10º Andar', '50, Sala 201', '3000', '1200', '800, Loja A', 
-        '150', '400', '2500, Térreo', '1700, Torre A', '30', '1900, Fundos', 
-        '500', '4000', '100'
-    ],
-    
-    # CAMPOS ORIGINAIS
-    'ENDERECO_COMPLETO': [
-        'Av. Paulista, 1000', 'R. Sete de Setembro, 50', 'Av. Faria Lima, 3000', 'R. da Bahia, 1200',
-        'R. Augusta, 800', 'R. XV de Novembro, 150', 'Praia de Botafogo, 400', 'Av. Afonso Pena, 2500',
-        'Av. Eng. Luis Carlos Berrini, 1700', 'R. Ébano Pereira, 30', 'R. Consolação, 1900',
-        'Av. Atlântica, 500', 'Av. Brigadeiro Faria Lima, 4000', 'R. Rio de Janeiro, 100'
-    ],
-    'NOME_SOCIO_ADMINISTRADOR': [
-        'João Silva', 'Maria Souza', 'Carlos Oliveira', 'Ana Paula Santos', 
-        'Pedro Costa', 'Fernanda Lima', 'Ricardo Mendes', 'Camila Pires',
-        'Roberto Dias', 'Luciana Gomes', 'Antônio Ferreira', 'Juliana Nunes',
-        'Daniel Barbosa', 'Laura Martins'
-    ], 
-    'PORTE': ['LTDA', 'ME', 'EPP', 'MEI', 'ME', 'LTDA', 'EPP', 'MEI', 'LTDA', 'ME',
-              'LTDA', 'EPP', 'ME', 'LTDA'],
-    'CAPITAL_SOCIAL': [500000, 10000, 80000, 5000, 20000, 
-                       100000, 150000, 500, 450000, 30000,
-                       25000, 50000, 75000, 120000],
-
-    # NOVOS CAMPOS DE CONTATO E ENRIQUECIMENTO (VAZIOS)
-    'CPF_DONO': ['MOCKADO_123'] * 14, # NOTA: CPF é um dado sensível, aqui é apenas um MOCK. Não é buscado via API pública.
-    'CELULAR_DONO': ['N/A'] * 14,
-    'WHATSAPP': ['N/A'] * 14,
-    'INSTAGRAM': ['N/A'] * 14,
-    'FACEBOOK': ['N/A'] * 14,
-    'SITE': ['N/A'] * 14,
-    'EMAIL_CONTATO': ['N/A'] * 14,
-    'LINKEDIN': ['N/A'] * 14,
-    'GOOGLE_MAPS_PERFIL': ['N/A'] * 14,
-}
-
-# Criamos o DataFrame (a tabela do Pandas)
-df = pd.DataFrame(dados_simulados)
-
-# =========================================================================
-# 3. MÓDULO II: DEFINIÇÃO DE FILTROS MÚLTIPLOS (Otimização)
-# =========================================================================
-
-# Filtros que queremos aplicar (múltiplos valores são permitidos)
-cnae_alvo = ['6201600', '7319000'] 
-porte_alvo = ['EPP', 'ME', 'LTDA']
-cidade_alvo = ['São Paulo', 'Curitiba']
-
-
-# =========================================================================
-# 4. COMANDO MÁGICO DE FILTRAGEM (Módulo I e II)
-# =========================================================================
-filtro_combinado = (
-    (df['CNAE'].isin(cnae_alvo)) & 
-    (df['PORTE'].isin(porte_alvo)) &
-    (df['CIDADE'].isin(cidade_alvo))
-)
-
-leads_filtrados = df[filtro_combinado].copy()
-
-# =========================================================================
-# 5. MÓDULO II: ATRIBUIÇÃO DE SCORE DE POTENCIAL
-# =========================================================================
-def calcular_score(row):
-    score = 0
-    
-    if row['PORTE'] == 'LTDA':
-        score += 3
-    elif row['PORTE'] == 'EPP':
-        score += 2
-    elif row['PORTE'] == 'ME':
-        score += 1
         
-    if row['CAPITAL_SOCIAL'] >= 100000:
-        score += 3
-    elif row['CAPITAL_SOCIAL'] >= 50000:
-        score += 2
-    else:
-        score += 1
+        df = pd.read_csv(
+            caminho_mestre, 
+            sep=';', 
+            encoding='utf-8', 
+            dtype=dtype_spec, # Usa a especificação de tipo para otimizar
+            low_memory=False, # Requer False para dtype_spec funcionar bem
+            keep_default_na=False
+        )
+        # Substitui strings vazias por NaN para agregação
+        df = df.replace('', np.nan) 
+
+    except Exception as e:
+        print(f"🛑 ERRO: Falha ao carregar o CSV Mestre. {e}")
+        print("Pode ser um erro de memória. Tente fechar outros programas e reexecutar.")
+        return False
+    
+    print(f"Dados carregados. Linhas totais: {len(df)}")
+
+
+    # 2. AGREGAÇÃO E CONCATENAÇÃO DE DADOS MÚLTIPLOS (NÃO PERDER INFORMAÇÕES)
+    
+    COLUNAS_MANTER_PRIMEIRO = [
+        'cnpj_basico', 'cnpj_ordem', 'cnpj_dv', 'matriz_filial', 
+        'razao_social', 'nome_fantasia', 'data_inicio_atividade', 
+        'situacao_cadastral', 'data_situacao_cadastral', 'capital_social',
+        'logradouro', 'numero', 'complemento', 'bairro', 'cep', 'uf', 'nome_municipio',
+        'ddd_1', 'telefone_1', 'correio_eletronico', 'cnae_fiscal_principal', 'porte_empresa'
+    ]
+    
+    COLUNAS_AGREGAR = [
+        'nome_socio', 'cpf_cnpj_socio', 'qualificacao_socio', 
+        'cnae_fiscal_secundario'
+    ]
+
+    # Função para agregar valores
+    def aggregate_data(series):
+        unique_values = series.dropna().unique()
+        return SEPARADOR_AGREGACAO.join(unique_values) if unique_values.size > 0 else np.nan
+
+    # Executa a agregação nas colunas específicas
+    df_agregado = df.groupby('cnpj_basico')[COLUNAS_AGREGAR].agg(aggregate_data).reset_index()
+
+    # Mantém a primeira ocorrência das colunas únicas (e mais importantes)
+    df_manter = df.drop_duplicates(subset='cnpj_basico', keep='first')[COLUNAS_MANTER_PRIMEIRO]
+    
+    # Junta as duas partes para formar o DataFrame final de leads
+    df_leads = pd.merge(df_manter, df_agregado, on='cnpj_basico', how='left')
+    
+    print(f"Linhas consolidadas e agregadas (CNPJ Básico Único): {len(df_leads)}")
+
+
+    # 3. FILTROS DE INTELIGÊNCIA CRÍTICA (Garantindo Leads de Qualidade)
+    
+    # 3.1. CNPJ Ativo
+    df_leads = df_leads[df_leads['situacao_cadastral'] == '1']
+    print(f"- Filtro Ativo (situacao_cadastral=1): {len(df_leads)}")
+
+
+    # 4. GERAÇÃO DA ESTRUTURA FINAL
+    COLUNAS_SITE_AGREGADAS = COLUNAS_MANTER_PRIMEIRO + COLUNAS_AGREGAR 
+    df_final = df_leads[COLUNAS_SITE_AGREGADAS].copy()
+    
+    print(f"Dados prontos para injeção HTML: {len(df_final)}")
+    
+    # 5. GERAR HTML
+    html_gerado = gerar_conteudo_html(df_final, SEPARADOR_AGREGACAO)
+    
+    # 6. INJETAR NO TEMPLATE
+    injetar_html_no_template(html_gerado, arquivo_html)
+
+    return True
+
+
+# ==============================================================================
+# 2. FUNÇÃO: GERAÇÃO DE CONTEÚDO HTML (Cria a estrutura legível)
+# ==============================================================================
+
+def gerar_conteudo_html(df_final: pd.DataFrame, separador: str) -> str:
+    """
+    Transforma cada linha do DataFrame em um bloco HTML formatado (Card de Lead).
+    """
+    html_blocos: List[str] = []
+    
+    for _, row in tqdm(df_final.iterrows(), total=len(df_final), desc="Gerando HTML dos Leads"):
         
-    final_score = min(score, 5)
-    return final_score
+        # --- Formatação de Dados para Legibilidade ---
+        cnpj_completo = f"{row['cnpj_basico']}{row['cnpj_ordem']}{row['cnpj_dv']}"
+        cnpj_formatado = f"{cnpj_completo[:8]}.{cnpj_completo[8:12]}-{cnpj_completo[12:]}"
+        
+        # O Pandas, usando float64, pode representar o capital social como um número.
+        capital_float = float(row['capital_social']) if pd.notna(row['capital_social']) else 0.0
+        # Formato monetário com milhares: R$ 1.234.567,89
+        capital_social = f"R$ {capital_float:,.2f}".replace(",", "_").replace(".", ",").replace("_", ".")
+        
+        # --- Processamento das Colunas Agregadas (SÓCIOS) ---
+        lista_socios = row['nome_socio'].split(separador) if pd.notna(row['nome_socio']) and isinstance(row['nome_socio'], str) else ['Nenhum Sócio Encontrado']
+        socios_html = "".join([f"<li>{nome_socio.strip()}</li>" for nome_socio in lista_socios])
 
-leads_filtrados['SCORE'] = leads_filtrados.apply(calcular_score, axis=1)
+        # Processamento dos CNAES Secundários
+        cnaes_secundarios = row['cnae_fiscal_secundario'].split(separador) if pd.notna(row['cnae_fiscal_secundario']) and isinstance(row['cnae_fiscal_secundario'], str) else ['Nenhum']
+        cnaes_sec_html = ", ".join([cnae.strip() for cnae in cnaes_secundarios])
+        
+        # --- Monta o Bloco HTML ---
+        card_html = f"""
+        <div class="lead-card">
+            <h3 class="razao-social">**{row['razao_social'] or 'N/A'}** ({row['nome_fantasia'] or 'N/A'})</h3>
+            <p class="cnpj-info">CNPJ: {cnpj_formatado} | Porte: {row['porte_empresa'] or 'N/A'}</p>
+            
+            <div class="secao-societaria">
+                <h4>Estrutura Societária Completa (Agregada):</h4>
+                <ul class="lista-socios">
+                    {socios_html}
+                </ul>
+            </div>
+            
+            <div class="detalhes-financeiros">
+                <p><strong>Capital Social:</strong> {capital_social}</p>
+                <p><strong>Status Legal:</strong> ATIVA desde {row['data_inicio_atividade'] or 'N/A'}</p>
+            </div>
+            
+            <div class="contato-e-localizacao">
+                <p>📍 {row['logradouro'] or 'S/N'}, {row['numero'] or 'N/A'} - {row['bairro'] or 'N/A'}, {row['nome_municipio'] or 'N/A'}/{row['uf'] or 'N/A'}</p>
+                <p>📞 ({row['ddd_1'] or '00'}) {row['telefone_1'] or 'N/A'} | 📧 {row['correio_eletronico'] or 'N/A'}</p>
+            </div>
+            
+            <div class="cnaes">
+                <p><strong>CNAE Principal:</strong> {row['cnae_fiscal_principal'] or 'N/A'}</p>
+                <p><strong>CNAEs Secundários:</strong> {cnaes_sec_html}</p>
+            </div>
+            
+            <hr>
+        </div>
+        """
+        html_blocos.append(card_html)
+        
+    return "\n".join(html_blocos)
 
-def classificar_potencial(score):
-    if score >= 4:
-        return 'ALTO'
-    elif score >= 3:
-        return 'MÉDIO'
-    else:
-        return 'BAIXO'
+# ==============================================================================
+# 3. FUNÇÃO: INJEÇÃO NO TEMPLATE HTML
+# ==============================================================================
 
-leads_filtrados['POTENCIAL'] = leads_filtrados['SCORE'].apply(classificar_potencial)
-
-leads_filtrados = leads_filtrados.sort_values(by=['SCORE', 'CAPITAL_SOCIAL'], ascending=False)
-
-
-# =========================================================================
-# 6. MÓDULO III: ENRIQUECIMENTO DE DADOS (Busca Completa)
-# =========================================================================
-
-print("\n----------------------------------------------")
-print("🤖 MÓDULO III: Iniciando Enriquecimento COMPLETO (Site, Email, Redes, Maps)...")
-
-# ETAPA 1: Busca do SITE (Pré-requisito para Email)
-leads_filtrados['SITE'] = leads_filtrados.apply(
-    lambda row: simular_busca_google(row['RAZAO_SOCIAL'], row['CIDADE']), 
-    axis=1
-)
-
-# ETAPA 2: Busca do EMAIL (Depende do SITE)
-leads_filtrados['EMAIL_CONTATO'] = leads_filtrados['SITE'].apply(simular_busca_email)
-
-# ETAPA 3: Busca de Contatos e Redes Sociais (WhatsApp, Instagram, Facebook, Celular Dono)
-contato_digital = leads_filtrados['RAZAO_SOCIAL'].apply(simular_busca_contato_digital).apply(pd.Series)
-
-# Atualiza o DataFrame com os resultados do enriquecimento digital
-for col in ['WHATSAPP', 'INSTAGRAM', 'FACEBOOK', 'CELULAR_DONO']:
-    leads_filtrados[col] = contato_digital[col]
-
-# ETAPA 4: Busca do LINKEDIN (Presença Profissional)
-leads_filtrados['LINKEDIN'] = leads_filtrados['RAZAO_SOCIAL'].apply(simular_busca_linkedin)
-
-# ETAPA 5: Busca do Perfil Google Maps
-leads_filtrados['GOOGLE_MAPS_PERFIL'] = leads_filtrados['RAZAO_SOCIAL'].apply(simular_busca_google_maps)
-
-
-print("✅ Enriquecimento concluído. (Simulação de APIs de Contato, Social e Maps)")
-print("----------------------------------------------")
-
-# =========================================================================
-# 7. Exibindo o Resultado Final (Relatório Completo de Vendas)
-# =========================================================================
-
-# Colunas na ordem de importância para Prospecção B2B
-colunas_exibicao = [
-    # 1. IDENTIFICAÇÃO E POTENCIAL
-    'POTENCIAL',
-    'SCORE',
-    'RAZAO_SOCIAL', 
-    'CNAE',
+def injetar_html_no_template(html_conteudo: str, caminho_template: str) -> bool:
+    """
+    Injeta o conteúdo HTML gerado no arquivo HTML de destino, usando um placeholder.
+    """
+    PLACEHOLDER_TAG = "<!-- LEADS_CONTENT_HERE -->" # Certificar que o placeholder está correto
     
-    # 2. CONTATO IMEDIATO
-    'EMAIL_CONTATO', 
-    'CELULAR_DONO', 
-    'WHATSAPP', 
-    'LINKEDIN',
-    'SITE',
+    try:
+        with open(caminho_template, 'r', encoding='utf-8') as f:
+            template_html = f.read()
+            
+        if PLACEHOLDER_TAG not in template_html:
+            print(f"AVISO: O placeholder '{PLACEHOLDER_TAG}' não foi encontrado no {caminho_template}. O conteúdo não será injetado.")
+            return False
+            
+        html_final = template_html.replace(PLACEHOLDER_TAG, html_conteudo)
+        
+        with open(caminho_template, 'w', encoding='utf-8') as f:
+            f.write(html_final)
+            
+        print(f"✅ CONTEÚDO INJETADO! O arquivo {caminho_template} foi atualizado com sucesso.")
+        return True
+        
+    except FileNotFoundError:
+        print(f"🛑 ERRO: O arquivo template {caminho_template} não foi encontrado.")
+        return False
+    except Exception as e:
+        print(f"🛑 ERRO ao injetar conteúdo no HTML: {e}")
+        return False
+
+
+# ==============================================================================
+# WRAPPER PRINCIPAL
+# ==============================================================================
+
+def executar_processamento_leads(nome_arquivo_html: str = 'index.html') -> bool:
+    """Orquestra as fases de leitura, filtragem e geração de HTML."""
+    caminho_mestre = _encontrar_caminho_mestre()
     
-    # 3. PRESENÇA E ENDEREÇO DETALHADO
-    'INSTAGRAM', 
-    'FACEBOOK', 
-    'GOOGLE_MAPS_PERFIL', 
-    'CIDADE', 
-    'RUA', 
-    'BAIRRO', 
-    'NUMERO_ESPECIFICACAO', 
-    'NOME_SOCIO_ADMINISTRADOR',
-    'CPF_DONO',
-]
+    if not caminho_mestre:
+        print("FALHA: Não foi possível localizar o CSV Mestre Final. Verifique a pasta 'Dados_CNPJ' e re-execute o pipeline de ETL.")
+        return False
+    
+    if aplicar_inteligencia_e_filtrar_leads(caminho_mestre, nome_arquivo_html):
+        print("\n" + "=" * 100)
+        print("FASE 7 (PROCESSAMENTO DE LEADS) CONCLUÍDA COM SUCESSO.")
+        print(f"Seu dashboard/site {nome_arquivo_html} foi gerado/atualizado. Abra o arquivo no navegador.")
+        print("=" * 100)
+        return True
+    
+    return False
 
-leads_final = leads_filtrados[colunas_exibicao]
-
-# Contagem de sucesso de enriquecimento
-leads_enriquecidos = len(leads_filtrados[
-    (leads_filtrados['SITE'] != 'N/A') | 
-    (leads_filtrados['EMAIL_CONTATO'] != 'N/A') | 
-    (leads_filtrados['LINKEDIN'] != 'N/A') |
-    (leads_filtrados['WHATSAPP'] != 'N/A') |
-    (leads_filtrados['GOOGLE_MAPS_PERFIL'] != 'Não')
-])
-
-
-print("==============================================")
-print(f"✅ Leads Qualificados e Enriquecidos:")
-print(f"🔍 Total de Leads com pelo menos 1 enriquecimento de contato/presença: {leads_enriquecidos}")
-print("----------------------------------------------")
-print("💰 TABELA FINAL DE INTELIGÊNCIA B2B (RELATÓRIO COMPLETO):")
-# Exibe a tabela completa (filtrada e enriquecida)
-print(leads_final)
-print("==============================================")
+if __name__ == '__main__':
+    executar_processamento_leads()

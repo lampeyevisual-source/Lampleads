@@ -1,0 +1,18 @@
+# Este arquivo diz ao Git quais arquivos e pastas IGORAR.
+# Assim, apenas o código fonte (.py, .html, .bat) é enviado para o GitHub.
+
+# 1. Ignorar Arquivos de Cache e Ambientes Virtuais (Python)
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# 2. Ignorar Dados Brutos e Arquivos Gerados (ARQUIVOS GRANDES!)
+# Ignora toda a pasta onde os dados brutos e o CSV Mestre são armazenados
+Dados_CNPJ/
+
+# 3. Ignorar outros arquivos de sistema ou temporários
+*.log
+*.tmp
+*~
